@@ -3,11 +3,79 @@ import asyncio
 import json
 import random
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+
+
+# -------------------------
+# Season Configuration
+# -------------------------
+# Season dates: (start_month, start_day, end_month, end_day)
+SEASON_CONFIG = {
+    "baseball": (2, 15, 6, 30),  # Feb 15 - Jun 30
+    "softball": (2, 15, 6, 30),  # Feb 15 - Jun 30
+    "mens_lacrosse": (2, 1, 5, 31),  # Feb 1 - May 31
+    "womens_lacrosse": (2, 1, 5, 31),  # Feb 1 - May 31
+    "lacrosse": (2, 1, 5, 31),  # Feb 1 - May 31
+    "mens_tennis": (1, 15, 5, 31),  # Jan 15 - May 31
+    "womens_tennis": (1, 15, 5, 31),  # Jan 15 - May 31
+    "mens_golf": (1, 1, 5, 15),  # Jan 1 - May 15
+    "womens_golf": (1, 1, 5, 15),  # Jan 1 - May 15
+    "womens_beach_volleyball": (3, 1, 5, 15),  # Mar 1 - May 15
+    "football": (8, 15, 1, 15),  # Aug 15 - Jan 15 (bowl games)
+    "mens_soccer": (8, 15, 12, 15),  # Aug 15 - Dec 15
+    "womens_soccer": (8, 15, 12, 15),  # Aug 15 - Dec 15
+    "womens_volleyball": (8, 15, 12, 20),  # Aug 15 - Dec 20
+    "field_hockey": (8, 15, 11, 30),  # Aug 15 - Nov 30
+    "mens_cross_country": (9, 1, 12, 15),  # Sep 1 - Dec 15
+    "womens_cross_country": (9, 1, 12, 15),  # Sep 1 - Dec 15
+    "mens_basketball": (11, 1, 4, 10),  # Nov 1 - Apr 10
+    "womens_basketball": (11, 1, 4, 10),  # Nov 1 - Apr 10
+    "mens_ice_hockey": (10, 1, 4, 15),  # Oct 1 - Apr 15
+    "womens_ice_hockey": (10, 1, 4, 15),  # Oct 1 - Apr 15
+    "wrestling": (10, 15, 4, 15),  # Oct 15 - Apr 15
+}
+
+
+def is_in_season(sport: str, check_date: date = None) -> bool:
+    """Check if a sport is currently in season."""
+    if check_date is None:
+        check_date = date.today()
+
+    season = SEASON_CONFIG.get(sport)
+    if not season:
+        return True  # No season defined = always in season
+
+    start_month, start_day, end_month, end_day = season
+
+    # Handle seasons that span year boundary (e.g., Nov - Apr, Aug - Jan)
+    if start_month > end_month:
+        # In season if we're in the "start" part (after start) OR "end" part (before end)
+        if check_date.month > start_month or (check_date.month == start_month and check_date.day >= start_day):
+            return True
+        if check_date.month < end_month or (check_date.month == end_month and check_date.day <= end_day):
+            return True
+        return False
+    else:
+        # Normal season within same year (e.g., Feb - Jun)
+        start = date(check_date.year, start_month, start_day)
+        end = date(check_date.year, end_month, end_day)
+        return start <= check_date <= end
+
+
+def get_season_str(sport: str) -> str:
+    """Get human-readable season string for a sport."""
+    season = SEASON_CONFIG.get(sport)
+    if not season:
+        return "Year-round"
+
+    months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    start_month, start_day, end_month, end_day = season
+    return f"{months[start_month]} {start_day} - {months[end_month]} {end_day}"
 
 
 # -------------------------
@@ -404,6 +472,11 @@ async def main_async(args):
     teams = load_team_list(team_list_path, division_filter)
     print(f"[+] Loaded {len(teams)} teams")
 
+    # Apply limit if specified
+    if args.limit and args.limit > 0:
+        teams = teams[:args.limit]
+        print(f"[+] Limited to {len(teams)} teams (--limit {args.limit})")
+
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -498,6 +571,10 @@ def main():
     p.add_argument("--output", default="sport_data/output.json")
     p.add_argument("--proxy-file", default=None, help="proxies.txt (1 per line)")
 
+    # limit and season
+    p.add_argument("--limit", type=int, default=0, help="Limit number of teams (0 = no limit)")
+    p.add_argument("--ignore-season", action="store_true", help="Scrape even if sport is off-season")
+
     # pacing
     p.add_argument("--min-gap", type=float, default=25.0)
     p.add_argument("--max-gap", type=float, default=60.0)
@@ -510,6 +587,18 @@ def main():
     p.add_argument("--base-backoff", type=float, default=8.0)
 
     args = p.parse_args()
+
+    # Season validation
+    if not args.ignore_season and not is_in_season(args.sport):
+        print(f"[!] {args.sport} is OFF-SEASON (season: {get_season_str(args.sport)})")
+        print("    Use --ignore-season to scrape anyway")
+        return
+
+    if is_in_season(args.sport):
+        print(f"[+] {args.sport} is IN-SEASON ({get_season_str(args.sport)})")
+    else:
+        print(f"[!] {args.sport} is OFF-SEASON but --ignore-season is set")
+
     asyncio.run(main_async(args))
 
 
